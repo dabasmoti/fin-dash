@@ -1,0 +1,62 @@
+# =============================================================================
+# Cloud Build pipeline — build, push, and deploy to Cloud Run
+# =============================================================================
+# Trigger: push to main branch or manual `gcloud builds submit`
+#
+# Required substitutions (set via trigger config or --substitutions):
+#   _REGION: GCP region (e.g., me-west1)
+#
+# Cloud Scheduler: 4x/day at 00:00, 06:00, 12:00, 18:00
+#   schedule: "0 */6 * * *"
+#
+# Required secrets in Secret Manager:
+#   BEINLEUMI_USERNAME, BEINLEUMI_PASSWORD
+#   MAX_USERNAME, MAX_PASSWORD
+#   ISRACARD_ID, ISRACARD_CARD6DIGITS, ISRACARD_PASSWORD
+#   VISACAL_USERNAME, VISACAL_PASSWORD
+#   AUTH_TOKEN
+# =============================================================================
+
+steps:
+  # Step 1: Build the combined Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/fin-dash/fin-dash:latest'
+      - '-f'
+      - 'Dockerfile.cloud'
+      - '.'
+
+  # Step 2: Push to Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/fin-dash/fin-dash:latest'
+
+  # Step 3: Deploy to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'fin-dash'
+      - '--image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/fin-dash/fin-dash:latest'
+      - '--region=${_REGION}'
+      - '--platform=managed'
+      - '--memory=1Gi'
+      - '--cpu=1'
+      - '--timeout=300'
+      - '--concurrency=1'
+      - '--min-instances=0'
+      - '--max-instances=1'
+      - '--set-env-vars=SCHEDULER_ENABLED=false,DB_PATH=/app/data/fin-dash.db,GCS_BUCKET=${_GCS_BUCKET},NODE_ENV=production,STATIC_DIR=/app/public,PUPPETEER_CACHE_DIR=/app/.cache/puppeteer,CLIENT_ORIGIN=https://fin-dash-orohbgl3yq-zf.a.run.app'
+      - '--set-secrets=AUTH_TOKEN=AUTH_TOKEN:latest,BEINLEUMI_USERNAME=BEINLEUMI_USERNAME:latest,BEINLEUMI_PASSWORD=BEINLEUMI_PASSWORD:latest,MAX_USERNAME=MAX_USERNAME:latest,MAX_PASSWORD=MAX_PASSWORD:latest,ISRACARD_ID=ISRACARD_ID:latest,ISRACARD_CARD6DIGITS=ISRACARD_CARD6DIGITS:latest,ISRACARD_PASSWORD=ISRACARD_PASSWORD:latest,VISACAL_USERNAME=VISACAL_USERNAME:latest,VISACAL_PASSWORD=VISACAL_PASSWORD:latest'
+      - '--allow-unauthenticated'
+
+substitutions:
+  _REGION: me-west1
+  _GCS_BUCKET: fin-dash-dabas-data
+
+options:
+  logging: CLOUD_LOGGING_ONLY

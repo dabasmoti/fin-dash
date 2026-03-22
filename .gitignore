@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Server build output
+server/dist/
+
+# SQLite database files
+server/data/*.db
+server/data/*.db-wal
+server/data/*.db-shm
+
+.a5c/
+.claude/
+
+# Scrape script logs
+scripts/*.log
