@@ -60,4 +60,4 @@ substitutions:
   _GCS_BUCKET: fin-dash-dabas-data
 
 options:
-  logging: GCS_ONLY
+  logging: CLOUD_LOGGING_ONLY
