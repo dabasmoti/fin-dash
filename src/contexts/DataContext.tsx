@@ -10,7 +10,6 @@ import {
 import type { BankScraperData, EnrichedTransaction } from "@/types/bank";
 import { getAllEnrichedTransactions } from "@/lib/data-utils";
 import {
-  checkHealth,
   fetchAllBankData,
   fetchCategoryRules,
   setCategoryRule as apiSetCategoryRule,
@@ -46,17 +45,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     setError(null);
 
     try {
-      console.log("[DataContext] Checking API health...");
-      const health = await checkHealth();
-      console.log("[DataContext] Health:", health);
-
-      if (health.configuredBanks.length === 0) {
-        setError("No banks configured. Add credentials to .env and restart the server.");
-        setIsLoading(false);
-        return;
-      }
-
-      console.log("[DataContext] Scraping banks:", health.configuredBanks.join(", "));
+      console.log("[DataContext] Fetching data...");
       const [apiData, rules] = await Promise.all([
         fetchAllBankData(),
         fetchCategoryRules(),
