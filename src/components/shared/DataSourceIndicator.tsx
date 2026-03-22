@@ -32,7 +32,7 @@ export function DataSourceIndicator() {
     fetch("/api/health")
       .then((res) => res.json())
       .then((data) => {
-        if (data.lastDbSync) setLastSync(data.lastDbSync);
+        if (data.lastScrape) setLastSync(data.lastScrape);
       })
       .catch(() => {});
   }, [isLoading]);
@@ -125,7 +125,7 @@ export function DataSourceIndicator() {
               </span>
             </TooltipTrigger>
             <TooltipContent>
-              Last DB sync: {new Date(lastSync).toLocaleString("he-IL")}
+              Last scrape: {new Date(lastSync).toLocaleString("he-IL")}
             </TooltipContent>
           </Tooltip>
         )}

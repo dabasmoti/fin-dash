@@ -73,10 +73,11 @@ router.get('/api/health', async (req: Request, res: Response) => {
     // Database may not be initialized in some edge cases
   }
 
-  let lastDbSync = null;
+  let lastScrape = null;
   try {
-    const { gcsBackupService } = await import('../services/gcs-backup.js');
-    lastDbSync = await gcsBackupService.getLastUpdated();
+    const history = databaseService.getScrapeHistory({ limit: 1 });
+    const lastSuccess = history.find((r) => r.success === 1);
+    lastScrape = lastSuccess?.completed_at ?? null;
   } catch { /* ignore */ }
 
   res.json({
@@ -86,7 +87,7 @@ router.get('/api/health', async (req: Request, res: Response) => {
     cacheStatus,
     scheduler: schedulerStatus,
     database: databaseStats,
-    lastDbSync,
+    lastScrape,
   });
 });
 
