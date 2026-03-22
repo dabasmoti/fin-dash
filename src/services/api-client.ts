@@ -5,7 +5,7 @@ import type { BankScraperData } from '@/types/bank';
  * AuthGuard handles the redirect to /login — no page reload needed.
  */
 async function apiFetch(url: string, init?: RequestInit): Promise<Response> {
-  const res = await fetch(url, init);
+  const res = await fetch(url, { credentials: 'include', ...init });
   if (res.status === 401 && !url.includes('/api/auth/')) {
     throw new Error('Session expired');
   }

@@ -35,7 +35,7 @@ export function DataSourceIndicator() {
         if (data.lastScrape) setLastSync(data.lastScrape);
       })
       .catch(() => {});
-  }, [isLoading]);
+  }, [bankData]);
 
   const connectedBanks = bankData.filter((b) => b.result.success);
   const failedBanks = bankData.filter((b) => !b.result.success);
