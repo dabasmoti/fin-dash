@@ -29,7 +29,7 @@ export function DataSourceIndicator() {
   const [lastSync, setLastSync] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/health")
+    fetch("/api/health", { credentials: "include" })
       .then((res) => res.json())
       .then((data) => {
         if (data.lastScrape) setLastSync(data.lastScrape);
