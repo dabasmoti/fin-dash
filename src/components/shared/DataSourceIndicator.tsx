@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -10,8 +11,31 @@ import {
 import { useData } from "@/contexts/DataContext";
 import { getBankDisplayName } from "@/constants/banks";
 
+function formatSyncTime(iso: string): string {
+  const date = new Date(iso);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+  const diffMins = Math.floor(diffMs / (1000 * 60));
+
+  if (diffMins < 1) return "just now";
+  if (diffMins < 60) return `${diffMins}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  return date.toLocaleDateString("he-IL", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+}
+
 export function DataSourceIndicator() {
   const { bankData, error, isLoading, refresh } = useData();
+  const [lastSync, setLastSync] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch("/api/health")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.lastDbSync) setLastSync(data.lastDbSync);
+      })
+      .catch(() => {});
+  }, [isLoading]);
 
   const connectedBanks = bankData.filter((b) => b.result.success);
   const failedBanks = bankData.filter((b) => !b.result.success);
@@ -92,6 +116,19 @@ export function DataSourceIndicator() {
             )}
           </TooltipContent>
         </Tooltip>
+
+        {lastSync && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="text-xs text-muted-foreground whitespace-nowrap">
+                Synced {formatSyncTime(lastSync)}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>
+              Last DB sync: {new Date(lastSync).toLocaleString("he-IL")}
+            </TooltipContent>
+          </Tooltip>
+        )}
 
         <Tooltip>
           <TooltipTrigger asChild>
