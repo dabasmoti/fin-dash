@@ -53,6 +53,7 @@ steps:
       - '--set-env-vars=SCHEDULER_ENABLED=false,DB_PATH=/app/data/fin-dash.db,GCS_BUCKET=${_GCS_BUCKET},NODE_ENV=production,STATIC_DIR=/app/public,PUPPETEER_CACHE_DIR=/app/.cache/puppeteer,CLIENT_ORIGIN=https://fin-dash-orohbgl3yq-zf.a.run.app'
       - '--set-secrets=AUTH_TOKEN=AUTH_TOKEN:latest,BEINLEUMI_USERNAME=BEINLEUMI_USERNAME:latest,BEINLEUMI_PASSWORD=BEINLEUMI_PASSWORD:latest,MAX_USERNAME=MAX_USERNAME:latest,MAX_PASSWORD=MAX_PASSWORD:latest,ISRACARD_ID=ISRACARD_ID:latest,ISRACARD_CARD6DIGITS=ISRACARD_CARD6DIGITS:latest,ISRACARD_PASSWORD=ISRACARD_PASSWORD:latest,VISACAL_USERNAME=VISACAL_USERNAME:latest,VISACAL_PASSWORD=VISACAL_PASSWORD:latest'
       - '--allow-unauthenticated'
+      - '--service-account=fin-dash-run@fin-dash-dabas.iam.gserviceaccount.com'
 
 substitutions:
   _REGION: me-west1
