@@ -235,10 +235,10 @@ export class DatabaseService {
   }
 
   /**
-   * Removes pending transactions that have a matching completed transaction
-   * (same bank, account, description, original_amount within 3 days).
-   * This happens when a CC transaction moves from pending to completed with
-   * a different date/processed_date, creating a duplicate row.
+   * Removes pending transactions that have a matching completed transaction.
+   * Matches on: same bank, account, original_amount, within 3 days, AND
+   * either exact description match OR the pending description is a prefix
+   * of the completed one (banks often append location details on completion).
    */
   private cleanStalePending(bankId: string): number {
     const result = this.getDb().prepare(`
@@ -252,10 +252,14 @@ export class DatabaseService {
             SELECT 1 FROM transactions c
             WHERE c.bank_id = p.bank_id
               AND c.account_number = p.account_number
-              AND c.description = p.description
               AND c.original_amount = p.original_amount
               AND c.status = 'completed'
               AND ABS(julianday(c.date) - julianday(p.date)) < 3
+              AND (
+                c.description = p.description
+                OR c.description LIKE p.description || '%'
+                OR p.description LIKE c.description || '%'
+              )
           )
       )
     `).run({ bankId });
