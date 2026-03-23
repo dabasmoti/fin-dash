@@ -695,13 +695,16 @@ export class DatabaseService {
     chargeDateStr: string,
   ): number {
     // Completed transactions: use charged_amount (the actual billing amount)
+    // Match processed_date within +/- 2 days of charge date to handle timezone
+    // shifts between UTC processed_date and Israel charge day
     const completed = this.getDb()
       .prepare(`
         SELECT COALESCE(-SUM(charged_amount), 0) as total
         FROM transactions
         WHERE bank_id = @bankId
           AND account_number = @accountNumber
-          AND strftime('%Y-%m-%d', datetime(processed_date, '+3 hours')) = @chargeDateStr
+          AND strftime('%Y-%m-%d', datetime(processed_date, '+3 hours')) >= date(@chargeDateStr, '-1 day')
+          AND strftime('%Y-%m-%d', datetime(processed_date, '+3 hours')) <= date(@chargeDateStr, '+2 days')
           AND charged_amount != 0
           AND status != 'pending'
       `)

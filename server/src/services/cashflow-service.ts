@@ -172,7 +172,7 @@ const CC_ACCOUNT_CHARGE_MAP: Array<{
   chargeDay: number;
   bankDescription: string;
 }> = [
-  { bankId: 'max', accountNumber: '5525', chargeDay: 3, bankDescription: 'מקס איט פיננסים' },
+  { bankId: 'max', accountNumber: '5525', chargeDay: 2, bankDescription: 'מקס איט פיננסים' },
   { bankId: 'max', accountNumber: '3329', chargeDay: 10, bankDescription: 'מקס איט פיננסים' },
   { bankId: 'isracard', accountNumber: '2262', chargeDay: 10, bankDescription: 'ישראכרט בע"מ' },
   { bankId: 'visaCal', accountNumber: '2608', chargeDay: 10, bankDescription: 'עפ"י הרשאה כאל' },
