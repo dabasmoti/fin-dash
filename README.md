@@ -1,6 +1,42 @@
 # fin-dash
 
-A full-stack personal finance dashboard for Israeli bank accounts and credit cards. Automatically scrapes transaction data from supported banks, stores it in SQLite, and presents it through an interactive React dashboard with charts, filters, and analytics.
+A personal finance dashboard for Israeli bank accounts and credit cards. Scrapes transaction data locally from your Mac, syncs to a cloud-hosted dashboard via GCP Cloud Run.
+
+## How It Works
+
+The system is split into two parts:
+
+```
+YOUR MAC (scraping)                         CLOUD RUN (dashboard)
+---------------------                       ----------------------
+Cron job runs daily                         Serves React dashboard
+at 12:00 noon                               at https://....run.app
+        |                                           |
+        v                                           v
+Starts local Express                        On cold start, downloads
+server + Puppeteer                          SQLite DB from GCS bucket
+        |                                           |
+        v                                           v
+Scrapes 4 Israeli banks                     Reads transactions from
+using home IP (banks                        local DB via /api/data/all
+block cloud IPs)                            (no scraping)
+        |                                           |
+        v                                           v
+Saves transactions to                       Shows dashboard with
+local SQLite DB                             charts, filters, analytics
+        |                                           |
+        v                                           v
+Uploads DB to Cloud Run                     Auth via AUTH_TOKEN
+via POST /api/db/upload                     (cookie + bearer token)
+        |
+        v
+Cloud Run saves DB
+to GCS bucket for
+persistence across
+cold starts
+```
+
+**Why the split?** Israeli banks block requests from cloud datacenter IPs. Scraping only works from a residential IP (your home network). The dashboard is hosted on Cloud Run for HTTPS access from anywhere.
 
 ## Supported Banks
 
@@ -9,6 +45,7 @@ A full-stack personal finance dashboard for Israeli bank accounts and credit car
 | Beinleumi (First International) | Bank account | Username + Password |
 | Max | Credit card | Username + Password |
 | Isracard | Credit card | ID + Card6Digits + Password |
+| Visa Cal | Credit card | Username + Password |
 
 ## Tech Stack
 
@@ -16,16 +53,9 @@ A full-stack personal finance dashboard for Israeli bank accounts and credit car
 
 **Backend:** Express, israeli-bank-scrapers, Puppeteer, better-sqlite3, node-cron
 
-**Infrastructure:** Docker, nginx, docker-compose, GCP Cloud Run, Cloud Storage, Secret Manager
+**Infrastructure:** GCP Cloud Run, Cloud Storage, Secret Manager, Cloud Build, Artifact Registry
 
-## Quick Start
-
-### Prerequisites
-
-- Node.js 20+
-- npm
-
-### Local Development
+## Quick Start (Local Development)
 
 ```bash
 # Install dependencies
@@ -40,174 +70,54 @@ cp .env.example .env
 npm run dev
 ```
 
-The frontend runs at `http://localhost:5173` and the backend at `http://localhost:3001`.
+Frontend: `http://localhost:5173` | Backend: `http://localhost:3001`
 
-### Docker Deployment
+Locally, the frontend scrapes banks live via `/api/scrape/all`. No login required unless `AUTH_TOKEN` is set in `.env`.
 
-```bash
-# Configure environment
-cp .env.example .env
-# Edit .env with your bank credentials
+## Cloud Run Deployment
 
-# Build and start
-docker compose up --build -d
-```
+### Prerequisites
 
-The app is served at `http://localhost` (port 80). The backend API is reverse-proxied through nginx at `/api/`.
+- `gcloud` CLI installed and authenticated
+- GCP project with billing enabled
 
-## Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `SERVER_PORT` | `3001` | Backend server port |
-| `CLIENT_ORIGIN` | `http://localhost:5173` | Frontend origin for CORS |
-| `SCRAPE_INTERVAL_MINUTES` | `30` | Auto-scrape interval in minutes |
-| `SCHEDULER_ENABLED` | `true` | Enable/disable automatic scraping |
-| `SCRAPER_TIMEOUT_MS` | `120000` | Puppeteer timeout per scrape (ms) |
-| `CACHE_TTL_MS` | `300000` | In-memory cache TTL (ms) |
-| `DB_PATH` | `server/data/fin-dash.db` | SQLite database file path |
-| `PUPPETEER_EXECUTABLE_PATH` | _(empty)_ | Path to Chromium binary (auto-set in Docker) |
-| `AUTH_TOKEN` | _(empty)_ | Dashboard login password. Leave empty to disable auth (local dev) |
-| `GCS_BUCKET` | _(empty)_ | GCS bucket for SQLite backup. Leave empty to disable (local dev) |
-
-Bank credentials are configured per provider. See `.env.example` for the full list.
-
-## Architecture
-
-```
-Browser --> nginx (port 80)
-              |
-              |--> /api/* --> Express backend (port 3001)
-              |--> /*     --> React SPA (static files)
-
-Express backend
-  ├── Scraper Service    (israeli-bank-scrapers + Puppeteer)
-  ├── Scheduler Service  (node-cron, configurable interval)
-  ├── Database Service   (SQLite with WAL mode)
-  └── Cache Service      (in-memory TTL cache)
-```
-
-### Data Flow
-
-1. **Scheduled scraping** - node-cron triggers `scrapeAllBanks()` every N minutes
-2. **On-demand scraping** - API calls trigger individual or bulk scrapes
-3. **Persistence** - Scraped transactions are upserted into SQLite (deduplication via composite key)
-4. **Caching** - Recent scrape results are cached in-memory to avoid redundant scrapes
-5. **Frontend** - React app fetches data via `/api/*` endpoints and renders dashboards
-
-## API Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/health` | Health check with scheduler status and DB stats |
-| GET | `/api/scrape/all` | Scrape all configured banks |
-| GET | `/api/scrape/:bankId` | Scrape a single bank |
-| GET | `/api/cache/clear` | Clear in-memory scrape cache |
-| GET | `/api/scheduler/status` | Current scheduler state |
-| POST | `/api/scheduler/trigger` | Manually trigger a scheduled scrape |
-| GET | `/api/transactions` | Query stored transactions (supports filters) |
-| GET | `/api/accounts` | List all accounts with balances |
-| GET | `/api/scrape-history` | Scrape run history |
-
-### Transaction Query Parameters
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `bankId` | string | Filter by bank ID |
-| `from` | ISO date | Start date |
-| `to` | ISO date | End date |
-| `status` | string | Transaction status |
-| `category` | string | Transaction category |
-| `limit` | number | Max results (default: 100) |
-| `offset` | number | Pagination offset |
-
-## Frontend Pages
-
-- **Dashboard** - Account balances, quick stats, recent transactions, spending charts
-- **Transactions** - Searchable data table with column sorting, filters, and CSV export
-- **Analytics** - Monthly trends, category breakdowns, top merchants, currency analysis, installment forecasts
-
-## Project Structure
-
-```
-fin-dash/
-├── src/                        # Frontend
-│   ├── pages/                  # Dashboard, Transactions, Analytics, Login
-│   ├── components/             # UI components (dashboard, analytics, auth, shared)
-│   ├── contexts/               # DataContext, FilterContext, ThemeContext
-│   ├── services/               # API client
-│   ├── types/                  # TypeScript interfaces
-│   └── constants/              # Bank and category definitions
-├── server/                     # Backend
-│   ├── src/
-│   │   ├── routes/             # Express route handlers
-│   │   ├── services/           # Scraper, scheduler, database, cache, GCS backup
-│   │   ├── config/             # Credentials, bank registry
-│   │   └── middleware/         # Auth, error handling
-│   ├── data/                   # SQLite database (gitignored)
-│   └── Dockerfile              # Multi-stage build with Chromium
-├── scripts/                    # Deployment and scraping scripts
-│   ├── setup-secrets.sh        # Create GCP secrets from .env
-│   └── scrape-and-upload.sh    # Local scrape + GCS upload (cron)
-├── Dockerfile.cloud            # Combined frontend+backend for Cloud Run
-├── cloudbuild.yaml             # Cloud Build CI/CD pipeline
-├── docker-compose.yml          # Local Docker orchestration
-├── Dockerfile                  # Frontend multi-stage build (local Docker)
-└── nginx.conf                  # Reverse proxy + SPA routing (local Docker)
-```
-
-## GCP Cloud Run Deployment
-
-The app is deployed as a single Cloud Run service (frontend + backend in one container). Scraping runs locally on your Mac because Israeli banks block cloud datacenter IPs. A macOS launchd job scrapes every 6 hours and uploads the SQLite DB to Cloud Storage. Cloud Run downloads the latest DB on each cold start.
-
-### Architecture
-
-```
-Your Mac (local scraping)
-  ├── launchd runs scrape-and-upload.sh every 6h
-  ├── Scrapes all banks via Puppeteer (home IP)
-  └── Uploads SQLite DB to Cloud Storage
-
-Cloud Run (dashboard only)
-  ├── Downloads DB from Cloud Storage on startup
-  ├── Serves React SPA + API
-  ├── Auth via AUTH_TOKEN (bearer token / cookie)
-  └── HTTPS automatic via *.run.app domain
-```
-
-### Initial Setup
-
-Prerequisites: `gcloud` CLI authenticated, a GCP project with billing enabled.
+### Setup (one-time)
 
 ```bash
-# 1. Enable APIs
-gcloud services enable run.googleapis.com secretmanager.googleapis.com \
-  cloudbuild.googleapis.com artifactregistry.googleapis.com storage.googleapis.com
+# 1. Enable APIs and create resources
+./infra/01-setup-project.sh
 
-# 2. Create infra
-gcloud artifacts repositories create fin-dash --repository-format=docker --location=me-west1
-gcloud storage buckets create gs://YOUR-BUCKET-NAME --location=me-west1 --uniform-bucket-level-access
+# 2. Create service accounts with least-privilege permissions
+./infra/02-create-service-accounts.sh
 
-# 3. Create secrets from .env (reads credentials, generates AUTH_TOKEN)
+# 3. Create AUTH_TOKEN secret (only secret needed in cloud)
 ./scripts/setup-secrets.sh
 
-# 4. Build and deploy
+# 4. Set up Cloud Build trigger in console:
+#    https://console.cloud.google.com/cloud-build/triggers/add
+#    Source: dabasmoti/fin-dash, Branch: main, Config: cloudbuild.yaml
+#    SA: fin-dash-build@fin-dash-dabas.iam.gserviceaccount.com
+
+# 5. First deploy
 gcloud builds submit --config=cloudbuild.yaml
 ```
 
-### Security
+### CI/CD
 
-- Bank credentials stored in GCP Secret Manager (never in files, images, or git)
-- HTTPS enforced automatically by Cloud Run
-- All API endpoints protected by AUTH_TOKEN (bearer token + HttpOnly cookie)
-- Login uses timing-safe comparison to prevent brute force timing leaks
-- Rate limiting on login endpoint (5 attempts per 15 minutes)
-- Non-root container user
-- SQLite encrypted at rest via GCS server-side encryption
+Push to `main` auto-deploys via Cloud Build trigger:
+1. Builds combined Docker image (frontend + backend + Chromium)
+2. Pushes to Artifact Registry
+3. Deploys to Cloud Run with AUTH_TOKEN from Secret Manager
 
 ### Local Scraping Cron Job
 
-The macOS launchd job is installed at `~/Library/LaunchAgents/com.fin-dash.scrape.plist` and runs the scrape script at 00:00, 06:00, 12:00, 18:00 daily.
+Installed at `~/Library/LaunchAgents/com.fin-dash.scrape.plist`. Runs daily at 12:00 noon.
+
+The script (`scripts/scrape-and-upload.sh`):
+1. Starts a temporary local server on port 3099
+2. Scrapes all 4 banks via Puppeteer
+3. Uploads the SQLite DB to Cloud Run via `curl` (no gcloud auth needed)
+4. Cloud Run saves the DB to GCS for cold start persistence
 
 ```bash
 # Check logs
@@ -223,41 +133,112 @@ launchctl unload ~/Library/LaunchAgents/com.fin-dash.scrape.plist
 launchctl load ~/Library/LaunchAgents/com.fin-dash.scrape.plist
 ```
 
-### Redeploying
+### Rotate AUTH_TOKEN
 
 ```bash
-gcloud builds submit --config=cloudbuild.yaml
+NEW_TOKEN=$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")
+echo -n "$NEW_TOKEN" | gcloud secrets versions add AUTH_TOKEN --data-file=-
+sed -i '' "s/AUTH_TOKEN=.*/AUTH_TOKEN=$NEW_TOKEN/" ~/fin-dash/.env
+git push  # triggers redeploy
 ```
 
-### Cost
+## Security
 
-Under $0.50/month. Cloud Run free tier covers compute. Only Secret Manager overage (~$0.24/month for 10 secrets vs 6 free).
+| Control | Where |
+|---|---|
+| Bank credentials in local `.env` only | Never in cloud, git, or Docker images |
+| AUTH_TOKEN in Secret Manager | Injected into Cloud Run at startup |
+| HTTPS enforced | Cloud Run auto-TLS on `*.run.app` |
+| Security headers | CSP, HSTS, X-Frame-Options, X-Content-Type-Options |
+| Auth on all API endpoints | Bearer token + HttpOnly/Secure/SameSite=Strict cookie |
+| Timing-safe password comparison | Prevents brute force timing leaks |
+| Rate limiting | 60 req/min per IP on all API routes, 5 login attempts per 15 min |
+| DB upload validation | SQLite magic bytes check |
+| Non-root container | Runs as `appuser` |
+| Least-privilege SAs | `fin-dash-run` (secrets + GCS only), `fin-dash-build` (deploy only) |
+| Error sanitization | Generic errors in production, full details only in dev |
 
-## Docker Details (Local)
+## Service Accounts
 
-**Backend image** - Multi-stage build on `node:20-slim`. Runtime stage installs system Chromium and dependencies for Puppeteer. Runs as non-root `appuser`. Includes a healthcheck against `/api/health`.
+| SA | Used By | Permissions |
+|---|---|---|
+| `fin-dash-run` | Cloud Run | `secretmanager.secretAccessor`, `storage.objectAdmin` (bucket only) |
+| `fin-dash-build` | Cloud Build CI/CD | `artifactregistry.writer`, `run.admin`, `secretmanager.secretAccessor`, `logging.logWriter` |
 
-**Frontend image** - Multi-stage build. Vite produces static assets, served by `nginx:1.25-alpine`. nginx handles SPA routing and proxies `/api/` to the backend with a 300s timeout for long-running scrapes.
+## API Endpoints
 
-**Data persistence** - SQLite database is stored in `./server/data/` and mounted as a Docker volume at `/app/data`.
+| Method | Endpoint | Description | Auth |
+|--------|----------|-------------|------|
+| GET | `/api/health` | Minimal public, full details with auth | Public (limited) |
+| GET | `/api/data/all` | Read all bank data from DB (no scraping) | Required |
+| GET | `/api/scrape/all` | Live scrape all banks (local only) | Required |
+| GET | `/api/scrape/:bankId` | Live scrape single bank | Required |
+| POST | `/api/db/upload` | Upload SQLite DB file (from local cron) | Required |
+| GET | `/api/transactions` | Query transactions with filters | Required |
+| GET | `/api/accounts` | List accounts with balances | Required |
+| POST | `/api/scheduler/trigger` | Trigger manual scrape | Required |
+| POST | `/api/auth/login` | Login with AUTH_TOKEN | Public |
+| GET | `/api/auth/check` | Check auth status | Public |
+| POST | `/api/auth/logout` | Clear auth cookie | Public |
 
-## Scripts
+## Frontend Pages
 
-```bash
-# Development
-npm run dev              # Start frontend + backend concurrently
-npm run dev:client       # Frontend only (Vite)
-npm run dev:server       # Backend only (tsx)
+- **Dashboard** `/` - Account balances, quick stats, recent transactions, spending charts, "Synced X ago" indicator
+- **Transactions** `/transactions` - Searchable data table with column sorting, filters, and CSV export
+- **Analytics** `/analytics` - Monthly trends, category breakdowns, top merchants, currency analysis, installment forecasts
+- **Login** `/login` - Password-protected entry (Cloud Run only)
 
-# Build
-npm run build            # TypeScript check + Vite production build
-cd server && npm run build  # Compile backend TypeScript
+## Data Routing (Frontend)
 
-# Docker
-docker compose up --build -d   # Build and start all services
-docker compose down             # Stop all services
-docker compose logs -f backend  # Tail backend logs
+The frontend automatically picks the right data source:
+
+| Environment | `window.location.hostname` | Data endpoint | Behavior |
+|---|---|---|---|
+| Local dev | `localhost` | `/api/scrape/all` | Live scrape via Puppeteer |
+| Cloud Run | `*.run.app` | `/api/data/all` | Read from SQLite DB |
+
+## Project Structure
+
 ```
+fin-dash/
+├── src/                        # Frontend (React + TypeScript)
+│   ├── pages/                  # Dashboard, Transactions, Analytics, Login
+│   ├── components/             # UI components (dashboard, analytics, auth, shared)
+│   ├── contexts/               # DataContext, FilterContext, ThemeContext
+│   ├── services/               # API client (auto-routes local vs cloud)
+│   ├── types/                  # TypeScript interfaces
+│   └── constants/              # Bank and category definitions
+├── server/                     # Backend (Express + TypeScript)
+│   ├── src/
+│   │   ├── routes/             # API endpoints (scraper, data, db upload)
+│   │   ├── services/           # Scraper, scheduler, database, cache, GCS backup
+│   │   ├── config/             # Credentials, bank registry
+│   │   └── middleware/         # Auth, rate limiting, security headers, error handling
+│   ├── data/                   # SQLite database (gitignored)
+│   └── Dockerfile              # Local Docker build with Chromium
+├── scripts/
+│   ├── scrape-and-upload.sh    # Local cron: scrape + upload DB to Cloud Run
+│   └── setup-secrets.sh        # Create AUTH_TOKEN in Secret Manager
+├── infra/
+│   ├── README.md               # GCP infra documentation
+│   ├── 01-setup-project.sh     # Enable APIs, create AR repo + GCS bucket
+│   └── 02-create-service-accounts.sh  # Create least-privilege SAs
+├── Dockerfile.cloud            # Combined build for Cloud Run
+├── cloudbuild.yaml             # CI/CD pipeline (GitHub push -> deploy)
+├── docker-compose.yml          # Local Docker orchestration
+└── nginx.conf                  # Local Docker reverse proxy
+```
+
+## Cost
+
+| Service | Free Tier | Usage | Cost |
+|---|---|---|---|
+| Cloud Run | 180K vCPU-sec | ~500 vCPU-sec | $0.00 |
+| Cloud Storage | 5 GB | <5 MB | $0.00 |
+| Secret Manager | 6 versions | 1 secret | $0.00 |
+| Artifact Registry | 500 MB | ~500 MB | $0.00 |
+| Cloud Build | 120 min/day | ~8 min/deploy | $0.00 |
+| **Total** | | | **$0.00/month** |
 
 ## License
 
