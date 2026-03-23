@@ -221,13 +221,45 @@ export class DatabaseService {
 
       this.recordScrapeRun(bankId, true, null, totalTransactionCount, triggerType);
 
+      // Clean up stale pending transactions that now have completed counterparts
+      const cleaned = this.cleanStalePending(bankId);
+
       console.log(
         `[db-service] Persisted ${totalTransactionCount} transactions ` +
-          `across ${result.accounts.length} accounts for "${bankId}"`,
+          `across ${result.accounts.length} accounts for "${bankId}"` +
+          (cleaned > 0 ? ` (cleaned ${cleaned} stale pending)` : ''),
       );
     });
 
     runInTransaction();
+  }
+
+  /**
+   * Removes pending transactions that have a matching completed transaction
+   * (same bank, account, description, original_amount within 3 days).
+   * This happens when a CC transaction moves from pending to completed with
+   * a different date/processed_date, creating a duplicate row.
+   */
+  private cleanStalePending(bankId: string): number {
+    const result = this.getDb().prepare(`
+      DELETE FROM transactions
+      WHERE id IN (
+        SELECT p.id
+        FROM transactions p
+        WHERE p.bank_id = @bankId
+          AND p.status = 'pending'
+          AND EXISTS (
+            SELECT 1 FROM transactions c
+            WHERE c.bank_id = p.bank_id
+              AND c.account_number = p.account_number
+              AND c.description = p.description
+              AND c.original_amount = p.original_amount
+              AND c.status = 'completed'
+              AND ABS(julianday(c.date) - julianday(p.date)) < 3
+          )
+      )
+    `).run({ bankId });
+    return result.changes;
   }
 
   // -------------------------------------------------------------------------
