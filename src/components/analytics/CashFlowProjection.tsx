@@ -27,7 +27,6 @@ import {
 import { Checkbox } from '@/components/ui/checkbox';
 import type {
   CashFlowProjection as CashFlowProjectionData,
-  CategoryForecast,
   ProjectedDay,
   RecurringItemSummary,
 } from '@/types/bank';
@@ -50,8 +49,6 @@ const TODAY_COLOR = '#3b82f6';
 const HISTORICAL_FILL_ID = 'historicalBalanceGradient';
 const FORECAST_FILL_ID = 'forecastBalanceGradient';
 
-const CV_STABLE_THRESHOLD = 0.3;
-const CV_MODERATE_THRESHOLD = 0.6;
 
 const CURRENCY_FORMATTER = new Intl.NumberFormat('he-IL', {
   style: 'currency',
@@ -129,10 +126,9 @@ function CustomTooltip({ active, payload }: CustomTooltipProps) {
         <div className="mt-2 space-y-0.5 text-xs">
           {data.events.map((event, idx) => {
             const isIncome = event.type === 'income';
-            const isForecast = event.type === 'forecast';
             const color = isIncome ? HEALTHY_COLOR : WARNING_COLOR;
             const prefix = isIncome ? '+' : '-';
-            const suffix = isForecast ? ' (estimated)' : '';
+            const suffix = '';
             return (
               <p key={idx} style={{ color }} dir="ltr">
                 {prefix} {CURRENCY_FORMATTER.format(Math.abs(event.amount))} {event.description}{suffix}
@@ -207,22 +203,6 @@ function findAnnotationDates(
 
 function getTodayDateString(): string {
   return format(new Date(), 'yyyy-MM-dd');
-}
-
-function getCvRowStyle(cv: number): string {
-  if (cv < CV_STABLE_THRESHOLD) {
-    return 'bg-green-50 dark:bg-green-950/20';
-  }
-  if (cv < CV_MODERATE_THRESHOLD) {
-    return 'bg-amber-50 dark:bg-amber-950/20';
-  }
-  return 'bg-red-50 dark:bg-red-950/20';
-}
-
-function getCvLabel(cv: number): string {
-  if (cv < CV_STABLE_THRESHOLD) return 'Stable';
-  if (cv < CV_MODERATE_THRESHOLD) return 'Moderate';
-  return 'Volatile';
 }
 
 // ---------------------------------------------------------------------------
@@ -355,21 +335,13 @@ function CashFlowProjectionInner() {
       .filter((item) => item.direction === 'income')
       .reduce((sum, item) => sum + item.amount, 0);
 
-    const categoryForecasts = projection.categoryForecasts ?? [];
-    const monthlyExpenses = categoryForecasts.reduce(
-      (sum, cf) => sum + cf.projectedMonthly,
-      0,
-    );
+    const monthlyExpenses = projection.recurringItems
+      .filter((item) => item.direction === 'expense')
+      .reduce((sum, item) => sum + item.amount, 0);
 
     const netCashFlow = monthlyIncome - monthlyExpenses;
 
     return { endBalance, monthlyIncome, monthlyExpenses, netCashFlow };
-  }, [projection]);
-
-  // Total projected expenses for proportion calculation
-  const totalProjectedExpenses = useMemo(() => {
-    const forecasts = projection?.categoryForecasts ?? [];
-    return forecasts.reduce((sum, cf) => sum + cf.projectedMonthly, 0);
   }, [projection]);
 
   // Loading state
@@ -419,8 +391,6 @@ function CashFlowProjectionInner() {
       </Card>
     );
   }
-
-  const categoryForecasts: CategoryForecast[] = projection.categoryForecasts ?? [];
 
   return (
     <Card>
@@ -621,80 +591,6 @@ function CashFlowProjectionInner() {
             </span>
           </div>
         </div>
-
-        {/* Category Forecast Table */}
-        {categoryForecasts.length > 0 && (
-          <>
-            <h3 className="text-sm font-semibold pt-2">Expense Forecast by Category</h3>
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Category</TableHead>
-                    <TableHead>Monthly Avg</TableHead>
-                    <TableHead>Projected</TableHead>
-                    <TableHead>Proportion</TableHead>
-                    <TableHead>Std Dev</TableHead>
-                    <TableHead>CV%</TableHead>
-                    <TableHead>Method</TableHead>
-                    <TableHead>90% CI Range</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {categoryForecasts.map((cf) => {
-                    const proportion =
-                      totalProjectedExpenses > 0
-                        ? (cf.projectedMonthly / totalProjectedExpenses) * 100
-                        : 0;
-                    const cvPercent = (cf.cv * 100).toFixed(1) + '%';
-                    const stabilityLabel = getCvLabel(cf.cv);
-
-                    return (
-                      <TableRow key={cf.category} className={getCvRowStyle(cf.cv)}>
-                        <TableCell className="font-medium">{cf.category}</TableCell>
-                        <TableCell dir="ltr">
-                          {CURRENCY_FORMATTER.format(cf.monthlyAvg)}
-                        </TableCell>
-                        <TableCell dir="ltr">
-                          {CURRENCY_FORMATTER.format(cf.projectedMonthly)}
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-2">
-                            <div className="w-16 h-2 bg-muted rounded-full overflow-hidden">
-                              <div
-                                className="h-full rounded-full"
-                                style={{
-                                  width: `${Math.min(proportion, 100)}%`,
-                                  backgroundColor: FORECAST_COLOR,
-                                }}
-                              />
-                            </div>
-                            <span className="text-xs text-muted-foreground">
-                              {proportion.toFixed(1)}%
-                            </span>
-                          </div>
-                        </TableCell>
-                        <TableCell dir="ltr">
-                          {CURRENCY_FORMATTER.format(cf.stdDev)}
-                        </TableCell>
-                        <TableCell>
-                          <span className="text-xs">
-                            {cvPercent} ({stabilityLabel})
-                          </span>
-                        </TableCell>
-                        <TableCell className="capitalize">{cf.method}</TableCell>
-                        <TableCell dir="ltr" className="text-xs">
-                          {CURRENCY_FORMATTER.format(cf.confidenceLow)} -{' '}
-                          {CURRENCY_FORMATTER.format(cf.confidenceHigh)}
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </div>
-          </>
-        )}
 
         {/* Recurring Items Table */}
         {projection.recurringItems.length > 0 && (

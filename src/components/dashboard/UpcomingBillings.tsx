@@ -43,8 +43,6 @@ export default function UpcomingBillings() {
         {billings.map((b) => {
           const color = getBankColor(b.bankId);
           const name = getBankDisplayName(b.bankId);
-          const isEstimate = b.source === 'historical_avg';
-
           return (
             <div
               key={`${b.bankId}-${b.accountNumber}`}
@@ -61,7 +59,6 @@ export default function UpcomingBillings() {
                   </p>
                   <p className="text-xs text-muted-foreground">
                     {format(parseISO(b.chargeDate), 'dd/MM/yyyy')}
-                    {isEstimate && ' (est.)'}
                   </p>
                 </div>
               </div>

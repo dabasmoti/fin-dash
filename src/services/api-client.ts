@@ -97,7 +97,7 @@ export interface UpcomingCardBilling {
   chargeDay: number;
   chargeDate: string;
   amount: number;
-  source: 'billing_cycle' | 'historical_avg';
+  source: 'billing_cycle';
 }
 
 export async function fetchUpcomingBillings(): Promise<UpcomingCardBilling[]> {

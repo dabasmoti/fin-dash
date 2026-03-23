@@ -10,7 +10,6 @@ import type {
   RecurringItemSummary,
   StoredRecurringPattern,
   StoredAccount,
-  CategoryForecast,
 } from '../types.js';
 
 // ---------------------------------------------------------------------------
@@ -102,14 +101,6 @@ export function classifyDescription(desc: string): string {
   return 'other';
 }
 
-/** Minimum months of data required for a category to be forecast. */
-const MIN_MONTHS_FOR_FORECAST = 3;
-
-/** Z-score for 90% confidence interval (one-tailed 5%). */
-const CONFIDENCE_Z_SCORE = 1.645;
-
-/** Default number of months of history for category forecasting. */
-const DEFAULT_FORECAST_MONTHS_BACK = 6;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -194,7 +185,7 @@ interface ProjectedCardCharge {
   description: string;
   amount: number;
   chargeDate: string; // YYYY-MM-DD
-  source: 'pending_cc:billing_cycle' | 'pending_cc:historical_avg';
+  source: 'pending_cc:billing_cycle';
 }
 
 /**
@@ -252,17 +243,6 @@ function computeUpcomingCardCharges(projectionMonths: number): ProjectedCardChar
           chargeDate: chargeDateStr,
           source: 'pending_cc:billing_cycle',
         });
-      } else {
-        // No CC data for this charge date — use historical bank charge median
-        const medianCharge = databaseService.queryMedianBankCharge(bankDescription, chargeDay);
-        if (medianCharge > 0) {
-          charges.push({
-            description: bankDescription,
-            amount: Math.round(medianCharge * 100) / 100,
-            chargeDate: chargeDateStr,
-            source: 'pending_cc:historical_avg',
-          });
-        }
       }
     }
   }
@@ -281,7 +261,7 @@ export interface UpcomingCardBilling {
   chargeDay: number;
   chargeDate: string;
   amount: number;
-  source: 'billing_cycle' | 'historical_avg';
+  source: 'billing_cycle';
 }
 
 /**
@@ -298,14 +278,12 @@ export function getUpcomingCardBillings(): UpcomingCardBilling[] {
   for (const mapping of CC_ACCOUNT_CHARGE_MAP) {
     const { bankId, accountNumber, chargeDay, bankDescription } = mapping;
 
-    // Find the next charge date (this month or next)
     for (let monthOffset = 0; monthOffset <= 1; monthOffset++) {
       const chargeYear = nowYear + Math.floor((nowMonth + monthOffset) / 12);
       const chargeMonthIdx = (nowMonth + monthOffset) % 12;
       const chargeDateUtc = new Date(Date.UTC(chargeYear, chargeMonthIdx, chargeDay));
       const chargeDateStr = toDateString(chargeDateUtc);
 
-      // Skip past dates that have already been debited
       if (chargeDateUtc.getTime() < todayUtc.getTime()) {
         const alreadyDebited = databaseService.hasCardChargeBeenDebited(
           bankDescription,
@@ -329,20 +307,6 @@ export function getUpcomingCardBillings(): UpcomingCardBilling[] {
           chargeDate: chargeDateStr,
           amount: Math.round(billingTotal * 100) / 100,
           source: 'billing_cycle',
-        });
-        break;
-      }
-
-      const medianCharge = databaseService.queryMedianBankCharge(bankDescription, chargeDay);
-      if (medianCharge > 0) {
-        billings.push({
-          bankId,
-          accountNumber,
-          bankDescription,
-          chargeDay,
-          chargeDate: chargeDateStr,
-          amount: Math.round(medianCharge * 100) / 100,
-          source: 'historical_avg',
         });
         break;
       }
@@ -386,30 +350,6 @@ function toRecurringItemSummary(
   };
 }
 
-// ---------------------------------------------------------------------------
-// Statistical helpers
-// ---------------------------------------------------------------------------
-
-function computeMean(values: number[]): number {
-  if (values.length === 0) return 0;
-  return values.reduce((sum, v) => sum + v, 0) / values.length;
-}
-
-function computeMedian(values: number[]): number {
-  if (values.length === 0) return 0;
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 0
-    ? (sorted[mid - 1] + sorted[mid]) / 2
-    : sorted[mid];
-}
-
-function computeStdDev(values: number[], mean: number): number {
-  if (values.length < 2) return 0;
-  const squaredDiffs = values.map((v) => (v - mean) ** 2);
-  const variance = squaredDiffs.reduce((sum, v) => sum + v, 0) / (values.length - 1);
-  return Math.sqrt(variance);
-}
 
 // ---------------------------------------------------------------------------
 // Historical daily balance reconstruction
@@ -497,118 +437,10 @@ function reconstructHistoricalBalance(monthsBack: number): ProjectedDay[] {
   return historicalDays;
 }
 
-// ---------------------------------------------------------------------------
-// Category-level expense forecasting
-// ---------------------------------------------------------------------------
-
-/**
- * Produces a statistical forecast for each spending category by analyzing
- * monthly totals across all banks over the specified lookback period.
- *
- * For each category with sufficient history (3+ months):
- * - Computes mean, median, and standard deviation of monthly spend
- * - Selects mean when spending is stable (CV < 0.3), median otherwise
- * - Provides a 90% confidence interval using z = 1.645
- */
-function forecastCategoryExpenses(
-  monthsBack: number = DEFAULT_FORECAST_MONTHS_BACK,
-): CategoryForecast[] {
-  const rawData = databaseService.queryCategorySpendingByMonth(monthsBack);
-
-  // Step 1 & 2: Classify and aggregate into Map<category, Map<month, total>>
-  const categoryMonthTotals = new Map<string, Map<string, number>>();
-
-  for (const row of rawData) {
-    let category: string;
-
-    if (row.bank_id === BANK_ACCOUNT_ID) {
-      // Beinleumi: classify by description since category is null
-      category = classifyDescription(row.description);
-    } else {
-      // Max / Isracard: map Hebrew category to normalized English
-      category = row.category
-        ? (HEBREW_CATEGORY_MAP[row.category] ?? 'other')
-        : 'other';
-    }
-
-    if (!categoryMonthTotals.has(category)) {
-      categoryMonthTotals.set(category, new Map());
-    }
-    const monthMap = categoryMonthTotals.get(category)!;
-    const current = monthMap.get(row.month) ?? 0;
-    monthMap.set(row.month, current + row.total_spend);
-  }
-
-  // Step 3: Build the complete list of months in the lookback window
-  const now = new Date();
-  const allMonths: string[] = [];
-  for (let i = monthsBack - 1; i >= 0; i--) {
-    const d = new Date(Date.UTC(now.getFullYear(), now.getMonth() - i, 1));
-    const y = d.getUTCFullYear();
-    const m = String(d.getUTCMonth() + 1).padStart(2, '0');
-    allMonths.push(`${y}-${m}`);
-  }
-
-  // Step 4 & 5: Compute forecasts per category
-  const forecasts: CategoryForecast[] = [];
-
-  for (const [category, monthMap] of categoryMonthTotals) {
-    // Count months that have any data
-    const monthsWithData = allMonths.filter((m) => (monthMap.get(m) ?? 0) > 0).length;
-    if (monthsWithData < MIN_MONTHS_FOR_FORECAST) continue;
-
-    // Collect monthly totals (fill 0 for missing months)
-    const monthlyValues = allMonths.map((m) => monthMap.get(m) ?? 0);
-
-    const mean = computeMean(monthlyValues);
-    const median = computeMedian(monthlyValues);
-    const stdDev = computeStdDev(monthlyValues, mean);
-    const cv = mean > 0 ? stdDev / mean : 0;
-
-    // Choose method based on coefficient of variation
-    const method: 'mean' | 'median' = cv < 0.3 ? 'mean' : 'median';
-    const projected = method === 'mean' ? mean : median;
-
-    const confidenceLow = Math.max(0, projected - CONFIDENCE_Z_SCORE * stdDev);
-    const confidenceHigh = projected + CONFIDENCE_Z_SCORE * stdDev;
-
-    const monthlyHistory = allMonths.map((m) => ({
-      month: m,
-      amount: Math.round((monthMap.get(m) ?? 0) * 100) / 100,
-    }));
-
-    forecasts.push({
-      category,
-      monthlyAvg: Math.round(mean * 100) / 100,
-      monthlyMedian: Math.round(median * 100) / 100,
-      stdDev: Math.round(stdDev * 100) / 100,
-      cv: Math.round(cv * 1000) / 1000,
-      projectedMonthly: Math.round(projected * 100) / 100,
-      confidenceLow: Math.round(confidenceLow * 100) / 100,
-      confidenceHigh: Math.round(confidenceHigh * 100) / 100,
-      method,
-      monthlyHistory,
-    });
-  }
-
-  // Sort by projectedMonthly descending (largest expense categories first)
-  forecasts.sort((a, b) => b.projectedMonthly - a.projectedMonthly);
-
-  return forecasts;
-}
 
 // ---------------------------------------------------------------------------
 // Main projection function
 // ---------------------------------------------------------------------------
-
-/**
- * Returns the number of days in the month that contains the given date.
- */
-function daysInMonth(date: Date): number {
-  return new Date(
-    Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0),
-  ).getUTCDate();
-}
 
 /**
  * Generates a comprehensive cash-flow projection combining:
@@ -657,17 +489,7 @@ export function generateCashFlowProjection(
   // Historical balance reconstruction
   const historicalDays = reconstructHistoricalBalance(clampedMonthsBack);
 
-  // Category-level expense forecasts
-  const categoryForecasts = forecastCategoryExpenses();
-
-  // Total forecasted monthly variable expenses from all categories
-  const totalForecastedMonthly = categoryForecasts.reduce(
-    (sum, fc) => sum + fc.projectedMonthly,
-    0,
-  );
-
-  // Build date range: today through projectionMonths months ahead.
-  // Use UTC midnight so toDateString() produces the correct calendar date.
+  // Build date range
   const now = new Date();
   const today = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
 
@@ -678,65 +500,8 @@ export function generateCashFlowProjection(
     (endDate.getTime() - today.getTime()) / MILLISECONDS_PER_DAY,
   );
 
-  // Pre-compute known expenses per month BEFORE the daily loop so the
-  // variable expense daily rate stays constant within each month.
-  //
-  // Expense accounting model:
-  // - Category forecast (totalForecastedMonthly) = expected TOTAL monthly spend
-  //   including spending that flows through credit cards.
-  // - Recurring bank debits (loan, mortgage) hit the bank directly and ARE part
-  //   of the forecast total.
-  // - Card charges represent CC spending billed to the bank. This spending is
-  //   ALSO captured in the category forecast.
-  //
-  // To avoid double-counting:
-  // - Current month: use actual card charges + recurring debits (no variable forecast)
-  // - Future months: variable = forecast - recurringBankDebits - actualCardCharges
-  // Card charges are based on historical bank debit medians. For the current
-  // month, they're shown as discrete events (the bank will actually debit these).
-  // For future months, spending that flows through credit cards is already part
-  // of the category forecast, so card charges are NOT added as separate events.
-  const currentMonthKey = toDateString(today).substring(0, 7);
-
-  // Accumulate known recurring bank debits per month (loan, mortgage, etc.)
-  const knownBankDebitsByMonth = new Map<string, number>();
-
-  for (let dayOffset = 1; dayOffset <= totalDays; dayOffset++) {
-    const d = addDays(today, dayOffset);
-    const monthKey = toDateString(d).substring(0, 7);
-
-    for (const pattern of recurringPatterns) {
-      if (pattern.direction === 'expense' && shouldPatternFireOnDate(pattern, d)) {
-        const current = knownBankDebitsByMonth.get(monthKey) ?? 0;
-        knownBankDebitsByMonth.set(monthKey, current + pattern.avg_amount);
-      }
-    }
-  }
-
-  // Compute daily variable expense rate per month (constant within each month).
-  // Current month: no variable forecast — actual card charges are shown instead.
-  // Future months: variable = totalForecast - recurringBankDebits
-  //   (card charges are NOT shown for future months since forecast covers them)
-  const dailyVariableByMonth = new Map<string, number>();
-  for (let mo = 0; mo < projectionMonths; mo++) {
-    const mDate = new Date(Date.UTC(
-      today.getUTCFullYear(),
-      today.getUTCMonth() + mo,
-      15,
-    ));
-    const monthKey = toDateString(mDate).substring(0, 7);
-
-    if (monthKey === currentMonthKey) {
-      dailyVariableByMonth.set(monthKey, 0);
-    } else {
-      const knownDebits = knownBankDebitsByMonth.get(monthKey) ?? 0;
-      const variableExpenses = Math.max(0, totalForecastedMonthly - knownDebits);
-      const daily = variableExpenses / daysInMonth(mDate);
-      dailyVariableByMonth.set(monthKey, Math.round(daily * 100) / 100);
-    }
-  }
-
-  // Generate daily projections
+  // Generate daily projections using only real data:
+  // recurring patterns (confirmed) and card charges (from billing cycles)
   const projectedDays: ProjectedDay[] = [];
   let runningBalance = startBalance;
 
@@ -744,16 +509,10 @@ export function generateCashFlowProjection(
     const currentDate = addDays(today, dayOffset);
     const events: CashFlowEvent[] = [];
 
-    // For today (dayOffset 0): recurring patterns are skipped because the
-    // bank balance already reflects debits that happened earlier today.
-    // However, card charges scheduled for today OR in the recent past that
-    // haven't been debited yet must be included — the bank balance does
-    // NOT reflect them yet.
     if (dayOffset === 0) {
       const todayStr = toDateString(currentDate);
 
       for (const charge of cardCharges) {
-        // Include charges for today or overdue past charges (not yet debited)
         if (charge.chargeDate <= todayStr) {
           events.push({
             description: charge.description,
@@ -775,7 +534,7 @@ export function generateCashFlowProjection(
       continue;
     }
 
-    // Check recurring income and expense patterns
+    // Recurring income and expense patterns (user-confirmed only)
     for (const pattern of recurringPatterns) {
       if (shouldPatternFireOnDate(pattern, currentDate)) {
         const amount =
@@ -792,40 +551,19 @@ export function generateCashFlowProjection(
       }
     }
 
-    // Card charges: include for the current month (actual bank debits) and
-    // for future months ONLY if based on real billing-cycle CC data.
-    // Historical-avg charges for future months are subsumed by the forecast.
+    // Card charges from real billing cycle data only
     const currentDateStr = toDateString(currentDate);
-    const dateMonthKey = currentDateStr.substring(0, 7);
     for (const charge of cardCharges) {
       if (charge.chargeDate === currentDateStr) {
-        const isCurrentMonth = dateMonthKey === currentMonthKey;
-        const hasBillingData = charge.source === 'pending_cc:billing_cycle';
-
-        if (isCurrentMonth || hasBillingData) {
-          events.push({
-            description: charge.description,
-            amount: -charge.amount,
-            type: 'card_charge',
-            source: charge.source,
-          });
-        }
+        events.push({
+          description: charge.description,
+          amount: -charge.amount,
+          type: 'card_charge',
+          source: charge.source,
+        });
       }
     }
 
-    // Add estimated variable expenses from category forecast (constant daily rate)
-    const monthKey = currentDateStr.substring(0, 7);
-    const dailyVariable = dailyVariableByMonth.get(monthKey) ?? 0;
-    if (dailyVariable > 0) {
-      events.push({
-        description: 'Estimated daily expenses',
-        amount: -dailyVariable,
-        type: 'forecast',
-        source: 'category_forecast',
-      });
-    }
-
-    // Update running balance
     const dayDelta = events.reduce((sum, event) => sum + event.amount, 0);
     runningBalance = Math.round((runningBalance + dayDelta) * 100) / 100;
 
@@ -840,7 +578,6 @@ export function generateCashFlowProjection(
   const recurringItems: RecurringItemSummary[] =
     recurringPatterns.map(toRecurringItemSummary);
 
-  // Append card charge summary items (deduplicated by description)
   const seenCardCompanies = new Set<string>();
   for (const charge of cardCharges) {
     if (!seenCardCompanies.has(charge.description)) {
@@ -862,6 +599,6 @@ export function generateCashFlowProjection(
     projectedDays,
     recurringItems,
     historicalDays,
-    categoryForecasts,
+    categoryForecasts: [],
   };
 }

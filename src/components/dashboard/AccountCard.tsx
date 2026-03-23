@@ -71,7 +71,6 @@ export default function AccountCard({ account, bankId, billing }: AccountCardPro
             </p>
             <p className="text-xs text-muted-foreground">
               Next charge {format(parseISO(billing.chargeDate), 'dd/MM')}
-              {billing.source === 'historical_avg' && ' (est.)'}
             </p>
           </div>
         ) : isCreditCard && !hasBalance ? (

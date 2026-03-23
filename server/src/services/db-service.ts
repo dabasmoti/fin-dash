@@ -662,7 +662,7 @@ export class DatabaseService {
     accountNumber: string,
     chargeDateStr: string,
   ): number {
-    // Part 1: Completed transactions where the CC assigned processed_date = charge date
+    // Completed transactions: use charged_amount (the actual billing amount)
     const completed = this.getDb()
       .prepare(`
         SELECT COALESCE(-SUM(charged_amount), 0) as total
@@ -675,12 +675,26 @@ export class DatabaseService {
       `)
       .get({ bankId, accountNumber, chargeDateStr }) as { total: number } | undefined;
 
-    // Pending transactions are NOT included — they don't have a reliable
-    // processed_date yet. Once they clear, the CC company assigns them to the
-    // correct billing cycle and they become completed with the right
-    // processed_date. Including them prematurely causes overcounting since
-    // some pending txns near the cutoff date end up on the NEXT cycle.
-    return Math.max(0, completed?.total ?? 0);
+    // Pending transactions: use original_amount (charged_amount is 0 for pending)
+    // Filter to the billing cycle window: from previous charge date to this charge date
+    const chargeDate = new Date(chargeDateStr + 'T00:00:00Z');
+    const prevChargeDate = new Date(chargeDate);
+    prevChargeDate.setUTCMonth(prevChargeDate.getUTCMonth() - 1);
+    const prevChargeDateStr = prevChargeDate.toISOString().substring(0, 10);
+
+    const pending = this.getDb()
+      .prepare(`
+        SELECT COALESCE(-SUM(original_amount), 0) as total
+        FROM transactions
+        WHERE bank_id = @bankId
+          AND account_number = @accountNumber
+          AND status = 'pending'
+          AND date >= @prevChargeDateStr
+          AND date < @chargeDateStr
+      `)
+      .get({ bankId, accountNumber, prevChargeDateStr, chargeDateStr }) as { total: number } | undefined;
+
+    return Math.max(0, (completed?.total ?? 0) + (pending?.total ?? 0));
   }
 
   /**
@@ -702,32 +716,6 @@ export class DatabaseService {
       `)
       .get({ cardDescription, chargeDateStr }) as { cnt: number } | undefined;
     return (row?.cnt ?? 0) > 0;
-  }
-
-  /**
-   * Returns the median historical bank charge amount for a given card company
-   * description and charge day. Used as fallback when no CC transaction data
-   * is available for a billing cycle.
-   */
-  queryMedianBankCharge(description: string, chargeDay: number): number {
-    const rows = this.getDb()
-      .prepare(`
-        SELECT ABS(original_amount) as amount
-        FROM transactions
-        WHERE bank_id = 'beinleumi'
-          AND original_amount < -1000
-          AND description LIKE @descPattern
-          AND CAST(strftime('%d', datetime(date, '+3 hours')) AS INTEGER) = @chargeDay
-        ORDER BY amount
-      `)
-      .all({ descPattern: `%${description.substring(0, 8)}%`, chargeDay }) as Array<{ amount: number }>;
-
-    if (rows.length === 0) return 0;
-    const amounts = rows.map(r => r.amount);
-    const mid = Math.floor(amounts.length / 2);
-    return amounts.length % 2 === 0
-      ? (amounts[mid - 1] + amounts[mid]) / 2
-      : amounts[mid];
   }
 
   /**
@@ -795,53 +783,6 @@ export class DatabaseService {
    *
    * Only negative amounts (expenses) are included.
    */
-  queryCategorySpendingByMonth(monthsBack: number): Array<{
-    month: string;
-    category: string | null;
-    description: string;
-    bank_id: string;
-    total_spend: number;
-    txn_count: number;
-  }> {
-    return this.getDb()
-      .prepare(`
-        SELECT
-          strftime('%Y-%m', datetime(date, '+3 hours')) AS month,
-          category,
-          description,
-          bank_id,
-          SUM(ABS(original_amount)) AS total_spend,
-          COUNT(*) AS txn_count
-        FROM transactions
-        WHERE original_amount < 0
-          AND date >= date('now', @monthsBackParam)
-          AND NOT (
-            bank_id = 'beinleumi'
-            AND (
-              description LIKE '%מקס איט%'
-              OR description LIKE '%ישראכרט%'
-              OR description LIKE '%כאל%'
-            )
-          )
-        GROUP BY
-          month,
-          CASE
-            WHEN bank_id = 'beinleumi' THEN description
-            ELSE COALESCE(category, description)
-          END,
-          bank_id
-        ORDER BY month ASC, total_spend DESC
-      `)
-      .all({ monthsBackParam: `-${monthsBack} months` }) as Array<{
-        month: string;
-        category: string | null;
-        description: string;
-        bank_id: string;
-        total_spend: number;
-        txn_count: number;
-      }>;
-  }
-
   confirmRecurringPattern(id: number): boolean {
     const result = this.getDb()
       .prepare('UPDATE recurring_patterns SET user_confirmed = 1, updated_at = datetime(\'now\') WHERE id = @id')
