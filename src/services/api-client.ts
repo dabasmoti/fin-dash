@@ -97,6 +97,7 @@ export interface UpcomingCardBilling {
   chargeDay: number;
   chargeDate: string;
   amount: number;
+  pendingAmount: number;
   source: 'billing_cycle';
 }
 

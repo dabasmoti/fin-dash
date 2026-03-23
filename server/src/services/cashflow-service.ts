@@ -261,6 +261,7 @@ export interface UpcomingCardBilling {
   chargeDay: number;
   chargeDate: string;
   amount: number;
+  pendingAmount: number;
   source: 'billing_cycle';
 }
 
@@ -298,7 +299,9 @@ export function getUpcomingCardBillings(): UpcomingCardBilling[] {
         chargeDateStr,
       );
 
-      if (billingTotal > 0) {
+      const pendingTotal = databaseService.queryCCPendingTotal(bankId, accountNumber);
+
+      if (billingTotal > 0 || pendingTotal > 0) {
         billings.push({
           bankId,
           accountNumber,
@@ -306,6 +309,7 @@ export function getUpcomingCardBillings(): UpcomingCardBilling[] {
           chargeDay,
           chargeDate: chargeDateStr,
           amount: Math.round(billingTotal * 100) / 100,
+          pendingAmount: Math.round(pendingTotal * 100) / 100,
           source: 'billing_cycle',
         });
         break;

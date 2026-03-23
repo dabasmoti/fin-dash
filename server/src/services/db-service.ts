@@ -675,26 +675,20 @@ export class DatabaseService {
       `)
       .get({ bankId, accountNumber, chargeDateStr }) as { total: number } | undefined;
 
-    // Pending transactions: use original_amount (charged_amount is 0 for pending)
-    // Filter to the billing cycle window: from previous charge date to this charge date
-    const chargeDate = new Date(chargeDateStr + 'T00:00:00Z');
-    const prevChargeDate = new Date(chargeDate);
-    prevChargeDate.setUTCMonth(prevChargeDate.getUTCMonth() - 1);
-    const prevChargeDateStr = prevChargeDate.toISOString().substring(0, 10);
+    return Math.max(0, completed?.total ?? 0);
+  }
 
-    const pending = this.getDb()
+  queryCCPendingTotal(bankId: string, accountNumber: string): number {
+    const row = this.getDb()
       .prepare(`
         SELECT COALESCE(-SUM(original_amount), 0) as total
         FROM transactions
         WHERE bank_id = @bankId
           AND account_number = @accountNumber
           AND status = 'pending'
-          AND date >= @prevChargeDateStr
-          AND date < @chargeDateStr
       `)
-      .get({ bankId, accountNumber, prevChargeDateStr, chargeDateStr }) as { total: number } | undefined;
-
-    return Math.max(0, (completed?.total ?? 0) + (pending?.total ?? 0));
+      .get({ bankId, accountNumber }) as { total: number } | undefined;
+    return Math.max(0, row?.total ?? 0);
   }
 
   /**

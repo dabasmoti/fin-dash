@@ -69,6 +69,11 @@ export default function AccountCard({ account, bankId, billing }: AccountCardPro
             <p className="text-xl font-bold text-red-600 dark:text-red-400" dir="ltr">
               {CURRENCY_FORMATTER.format(billing.amount)}
             </p>
+            {billing.pendingAmount > 0 && (
+              <p className="text-sm text-amber-600 dark:text-amber-400" dir="ltr">
+                + {CURRENCY_FORMATTER.format(billing.pendingAmount)} pending
+              </p>
+            )}
             <p className="text-xs text-muted-foreground">
               Next charge {format(parseISO(billing.chargeDate), 'dd/MM')}
             </p>
