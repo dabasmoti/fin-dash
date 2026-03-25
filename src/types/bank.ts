@@ -159,6 +159,8 @@ export interface CashFlowEvent {
   amount: number;
   type: 'income' | 'expense' | 'card_charge' | 'forecast';
   source: string;
+  bankId?: string;
+  accountNumber?: string;
 }
 
 export interface ProjectedDay {
@@ -175,6 +177,9 @@ export interface RecurringItemSummary {
   typicalDay: number;
   direction: 'income' | 'expense';
   isUserConfirmed: boolean;
+  category: string | null;
+  bankId?: string;
+  accountNumber?: string;
 }
 
 export interface CategoryForecast {

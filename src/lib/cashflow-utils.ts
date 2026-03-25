@@ -94,6 +94,53 @@ export async function fetchRecurringPatternsForMatching(): Promise<RecurringPatt
 }
 
 /**
+ * Fetches individual CC transactions for a specific billing cycle charge date.
+ */
+export interface BillingTransaction {
+  description: string;
+  date: string;
+  original_amount: number;
+  charged_amount: number;
+  original_currency: string;
+  category: string | null;
+  status: string;
+  installment_number: number | null;
+  installment_total: number | null;
+}
+
+export interface BillingDetails {
+  bankId: string;
+  accountNumber: string;
+  chargeDate: string;
+  transactions: BillingTransaction[];
+  total: number;
+  pendingTotal: number;
+  count: number;
+}
+
+export async function fetchBillingDetails(
+  bankId: string,
+  accountNumber: string,
+  chargeDate: string,
+): Promise<BillingDetails> {
+  const response = await fetch(
+    `/api/billing-details/${bankId}/${accountNumber}/${chargeDate}`,
+  );
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch billing details: ${response.statusText}`);
+  }
+
+  const json = await response.json();
+
+  if (!json.success || !json.data) {
+    throw new Error(json.error ?? 'Unknown error fetching billing details');
+  }
+
+  return json.data as BillingDetails;
+}
+
+/**
  * Marks a recurring pattern as user-confirmed on the server.
  * This increases the pattern's weight in projection calculations.
  */

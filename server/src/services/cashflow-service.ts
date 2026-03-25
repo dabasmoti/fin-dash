@@ -3,6 +3,7 @@
 // ---------------------------------------------------------------------------
 
 import { databaseService } from './db-service.js';
+import { normalizeCategory } from '../utils/category-utils.js';
 import type {
   CashFlowProjection,
   ProjectedDay,
@@ -42,64 +43,8 @@ const BANK_ACCOUNT_ID = 'beinleumi';
 // Category classification
 // ---------------------------------------------------------------------------
 
-/**
- * Hebrew keyword-to-category mapping for beinleumi transactions whose
- * category is NULL in the database. Checked in order; first match wins.
- */
-const DESCRIPTION_CATEGORY_MAP: [string, string][] = [
-  ['סופר', 'food'], ['מזון', 'food'], ['שופרסל', 'food'], ['רמי לוי', 'food'],
-  ['מסעד', 'restaurants'], ['קפה', 'restaurants'],
-  ['ביטוח', 'insurance'],
-  ['דלק', 'fuel'], ['פז ', 'fuel'], ['סונול', 'fuel'],
-  ['חשמל', 'utilities'], ['מים ', 'utilities'], ['בזק', 'utilities'],
-  ['סלקום', 'utilities'], ['פלאפון', 'utilities'], ['פרטנר', 'utilities'], ['הוט ', 'utilities'],
-  ['רפואה', 'health'], ['מרקח', 'health'], ['כללית', 'health'], ['מכבי', 'health'],
-  ['חינוך', 'education'],
-  ['גן ', 'childcare'],
-  ['משכנ', 'housing'], ['שכר דירה', 'housing'],
-  ['הלוואה', 'loans'],
-  ['משכורת', 'salary'],
-  ['תחבור', 'transport'], ['חניה', 'transport'], ['רכב', 'transport'],
-];
-
-/**
- * Maps Hebrew category names (used by Max/Isracard scrapers) to normalized
- * English category identifiers.
- */
-const HEBREW_CATEGORY_MAP: Record<string, string> = {
-  'מזון וצריכה': 'food',
-  'מסעדות, קפה וברים': 'restaurants',
-  'ביטוח': 'insurance',
-  'דלק, חשמל וגז': 'fuel',
-  'שירותי תקשורת': 'utilities',
-  'רפואה ובתי מרקחת': 'health',
-  'חשמל ומחשבים': 'electronics',
-  'תחבורה ורכבים': 'transport',
-  'פנאי, בידור וספורט': 'entertainment',
-  'אופנה': 'clothing',
-  'עיצוב הבית': 'home',
-  'קוסמטיקה וטיפוח': 'shopping',
-  'טיסות ותיירות': 'travel',
-  'משיכת מזומן': 'cash',
-  'העברת כספים': 'transfer',
-  'עירייה וממשלה': 'utilities',
-  'חיות מחמד': 'other',
-  'שונות': 'other',
-};
-
-/**
- * Classifies a beinleumi transaction description into a spending category
- * by scanning for Hebrew keyword matches. Returns 'other' when no keyword
- * matches.
- */
-export function classifyDescription(desc: string): string {
-  for (const [keyword, category] of DESCRIPTION_CATEGORY_MAP) {
-    if (desc.includes(keyword)) {
-      return category;
-    }
-  }
-  return 'other';
-}
+// Category normalization and description classification are imported
+// from ../utils/category-utils.ts (shared utility).
 
 
 // ---------------------------------------------------------------------------
@@ -181,11 +126,25 @@ const CC_ACCOUNT_CHARGE_MAP: Array<{
 /** Known card company description substrings (used for filtering recurring patterns) */
 const CARD_COMPANY_DESCRIPTIONS = ['מקס איט', 'ישראכרט', 'כאל'];
 
+/** Hebrew display names for card companies, used for per-card labels. */
+const CARD_DISPLAY_NAMES: Record<string, string> = {
+  max: 'מקס',
+  isracard: 'ישראכרט',
+  visaCal: 'כאל',
+};
+
+function getCardDisplayName(bankId: string, accountNumber: string): string {
+  const prefix = CARD_DISPLAY_NAMES[bankId] ?? bankId;
+  return `${prefix} ${accountNumber}`;
+}
+
 interface ProjectedCardCharge {
   description: string;
   amount: number;
   chargeDate: string; // YYYY-MM-DD
   source: 'pending_cc:billing_cycle';
+  bankId: string;
+  accountNumber: string;
 }
 
 /**
@@ -242,6 +201,8 @@ function computeUpcomingCardCharges(projectionMonths: number): ProjectedCardChar
           amount: Math.round(billingTotal * 100) / 100,
           chargeDate: chargeDateStr,
           source: 'pending_cc:billing_cycle',
+          bankId,
+          accountNumber,
         });
       }
     }
@@ -351,6 +312,7 @@ function toRecurringItemSummary(
     typicalDay: pattern.typical_day ?? 1,
     direction: pattern.direction,
     isUserConfirmed: pattern.user_confirmed === 1,
+    category: normalizeCategory(pattern.category, pattern.description),
   };
 }
 
@@ -523,6 +485,8 @@ export function generateCashFlowProjection(
             amount: -charge.amount,
             type: 'card_charge',
             source: charge.source,
+            bankId: charge.bankId,
+            accountNumber: charge.accountNumber,
           });
         }
       }
@@ -564,6 +528,8 @@ export function generateCashFlowProjection(
           amount: -charge.amount,
           type: 'card_charge',
           source: charge.source,
+          bankId: charge.bankId,
+          accountNumber: charge.accountNumber,
         });
       }
     }
@@ -582,20 +548,29 @@ export function generateCashFlowProjection(
   const recurringItems: RecurringItemSummary[] =
     recurringPatterns.map(toRecurringItemSummary);
 
-  const seenCardCompanies = new Set<string>();
+  // Add per-card charge items, deduplicated by bankId+accountNumber.
+  // Each card account gets its own entry with a descriptive display name.
+  const seenCards = new Set<string>();
   for (const charge of cardCharges) {
-    if (!seenCardCompanies.has(charge.description)) {
-      seenCardCompanies.add(charge.description);
-      recurringItems.push({
-        id: -1,
-        description: charge.description,
-        amount: charge.amount,
-        frequency: 'monthly',
-        typicalDay: DEFAULT_CHARGE_DAY,
-        direction: 'expense',
-        isUserConfirmed: false,
-      });
-    }
+    const cardKey = `${charge.bankId}|${charge.accountNumber}`;
+    if (seenCards.has(cardKey)) continue;
+    seenCards.add(cardKey);
+
+    const displayName = getCardDisplayName(charge.bankId, charge.accountNumber);
+    recurringItems.push({
+      id: -1,
+      description: displayName,
+      amount: charge.amount,
+      frequency: 'monthly',
+      typicalDay: CC_ACCOUNT_CHARGE_MAP.find(
+        (m) => m.bankId === charge.bankId && m.accountNumber === charge.accountNumber,
+      )?.chargeDay ?? DEFAULT_CHARGE_DAY,
+      direction: 'expense',
+      isUserConfirmed: false,
+      category: 'credit_card',
+      bankId: charge.bankId,
+      accountNumber: charge.accountNumber,
+    });
   }
 
   return {

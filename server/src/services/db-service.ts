@@ -717,6 +717,52 @@ export class DatabaseService {
     return Math.max(0, completed?.total ?? 0);
   }
 
+  /**
+   * Returns individual CC transactions for a specific billing cycle.
+   * Matches by processed_date within +/- range of the charge date,
+   * same logic as queryCCChargeByProcessedDate but returns rows.
+   */
+  queryCCBillingTransactions(
+    bankId: string,
+    accountNumber: string,
+    chargeDateStr: string,
+  ): Array<{
+    description: string;
+    date: string;
+    original_amount: number;
+    charged_amount: number;
+    original_currency: string;
+    category: string | null;
+    status: string;
+    installment_number: number | null;
+    installment_total: number | null;
+  }> {
+    return this.getDb()
+      .prepare(`
+        SELECT description, date, original_amount, charged_amount,
+               original_currency, category, status,
+               installment_number, installment_total
+        FROM transactions
+        WHERE bank_id = @bankId
+          AND account_number = @accountNumber
+          AND strftime('%Y-%m-%d', datetime(processed_date, '+3 hours')) >= date(@chargeDateStr, '-1 day')
+          AND strftime('%Y-%m-%d', datetime(processed_date, '+3 hours')) <= date(@chargeDateStr, '+2 days')
+          AND charged_amount != 0
+        ORDER BY ABS(charged_amount) DESC
+      `)
+      .all({ bankId, accountNumber, chargeDateStr }) as Array<{
+        description: string;
+        date: string;
+        original_amount: number;
+        charged_amount: number;
+        original_currency: string;
+        category: string | null;
+        status: string;
+        installment_number: number | null;
+        installment_total: number | null;
+      }>;
+  }
+
   queryCCPendingTotal(bankId: string, accountNumber: string): number {
     const row = this.getDb()
       .prepare(`

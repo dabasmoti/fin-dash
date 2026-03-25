@@ -110,7 +110,9 @@ export default function DashboardPage() {
         <div className="flex gap-4 overflow-x-auto pb-2">
           {bankData.map((bank) =>
             bank.result.success
-              ? bank.result.accounts.map((account) => (
+              ? bank.result.accounts
+                  .filter((account) => account.txns.length > 0 || account.balance != null)
+                  .map((account) => (
                   <AccountCard
                     key={`${bank.bankId}-${account.accountNumber}`}
                     account={account}

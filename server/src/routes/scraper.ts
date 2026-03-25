@@ -514,6 +514,54 @@ router.get(
 );
 
 // ---------------------------------------------------------------------------
+// GET /api/billing-details/:bankId/:accountNumber/:chargeDate
+// ---------------------------------------------------------------------------
+router.get(
+  '/api/billing-details/:bankId/:accountNumber/:chargeDate',
+  (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const bankId = req.params.bankId as string;
+      const accountNumber = req.params.accountNumber as string;
+      const chargeDate = req.params.chargeDate as string;
+
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(chargeDate)) {
+        res.status(400).json({ success: false, error: 'chargeDate must be YYYY-MM-DD' });
+        return;
+      }
+
+      const transactions = databaseService.queryCCBillingTransactions(
+        bankId,
+        accountNumber,
+        chargeDate,
+      );
+
+      const total = transactions
+        .filter((t) => t.status !== 'pending')
+        .reduce((sum, t) => sum + Math.abs(t.charged_amount), 0);
+
+      const pendingTotal = transactions
+        .filter((t) => t.status === 'pending')
+        .reduce((sum, t) => sum + Math.abs(t.charged_amount), 0);
+
+      res.json({
+        success: true,
+        data: {
+          bankId,
+          accountNumber,
+          chargeDate,
+          transactions,
+          total: Math.round(total * 100) / 100,
+          pendingTotal: Math.round(pendingTotal * 100) / 100,
+          count: transactions.length,
+        },
+      });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
 // Category rules (user-defined description -> category mappings)
 // ---------------------------------------------------------------------------
 
